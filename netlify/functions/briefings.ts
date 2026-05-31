@@ -13,7 +13,7 @@ import { briefings as mockBriefings } from '../../src/data/mockBriefings';
 
 const STORE = 'signal-gate';
 const KEY = 'latest';
-const STALE_MS = 6 * 60 * 60 * 1000; // regenerate if older than 6h
+const STALE_MS = 24 * 60 * 60 * 1000; // passive floor: regenerate if older than a day
 const TRIGGER_COOLDOWN_MS = 2 * 60 * 1000; // don't fire regen more than once / 2 min per instance
 
 type StoredBriefing = { generatedAt?: number; source?: string; data?: unknown; error?: string };

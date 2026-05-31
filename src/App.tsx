@@ -9,7 +9,13 @@ import { Radar } from './components/Radar';
 import { DiscardedNoise } from './components/DiscardedNoise';
 import { ActionMatrix } from './components/ActionMatrix';
 import { Thresholds } from './components/Thresholds';
-import { getDataSourceId, getPayloadSource, loadBriefings } from './lib/briefingSource';
+import {
+  getDataSourceId,
+  getPayloadGeneratedAt,
+  getPayloadSource,
+  loadBriefings,
+  requestRegeneration,
+} from './lib/briefingSource';
 import { useLastVisit } from './lib/useLastVisit';
 import type { BriefingRun } from './types/briefing';
 
@@ -64,15 +70,52 @@ export default function App() {
     return () => window.clearTimeout(t);
   }, [justRefreshed]);
 
-  function handleRefresh() {
+  async function handleRefresh() {
     if (isRefreshing || sequence.length === 0) return;
     setIsRefreshing(true);
-    const delay = 700 + Math.random() * 500;
-    window.setTimeout(() => {
+
+    // Mock mode: just toggle between the two bundled snapshots.
+    if (dataSourceId !== 'netlify') {
+      await new Promise((r) => setTimeout(r, 700 + Math.random() * 500));
       setIndex((i) => (i + 1) % sequence.length);
       setIsRefreshing(false);
       setJustRefreshed(true);
-    }, delay);
+      return;
+    }
+
+    // Netlify mode: trigger a real regeneration and poll until it lands.
+    const before = getPayloadGeneratedAt();
+    await requestRegeneration();
+    const deadline = Date.now() + 90000;
+    let landed = false;
+    while (Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 5000));
+      try {
+        const fresh = await loadBriefings();
+        const gen = getPayloadGeneratedAt();
+        if (getPayloadSource().startsWith('gemini') && gen && gen !== before) {
+          setData(fresh);
+          setPayloadSource(getPayloadSource());
+          setIndex(Math.max(0, fresh.length - 1));
+          landed = true;
+          break;
+        }
+      } catch {
+        /* keep polling */
+      }
+    }
+    if (!landed) {
+      // Regeneration was slow or failed; at least surface the latest stored state.
+      try {
+        const latest = await loadBriefings();
+        setData(latest);
+        setPayloadSource(getPayloadSource());
+      } catch {
+        /* ignore */
+      }
+    }
+    setIsRefreshing(false);
+    setJustRefreshed(true);
   }
 
   if (loadError) {

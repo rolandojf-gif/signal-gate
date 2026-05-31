@@ -19,6 +19,24 @@ export function getPayloadSource(): string {
   return lastPayloadSource;
 }
 
+// When the stored briefing was produced (ISO string from the function), used to
+// detect that an on-demand regeneration has actually landed.
+let lastGeneratedAt = '';
+export function getPayloadGeneratedAt(): string {
+  return lastGeneratedAt;
+}
+
+// On-demand: ask the background function to generate a fresh briefing. Returns
+// immediately (the work runs server-side); poll loadBriefings() for the result.
+export async function requestRegeneration(): Promise<void> {
+  if (SOURCE !== 'netlify') return;
+  try {
+    await fetch('/.netlify/functions/generate-briefing-background', { method: 'POST' });
+  } catch {
+    /* fire-and-forget */
+  }
+}
+
 /**
  * Re-derive signalScore from its parts so *any* backend — mock today, a Netlify
  * Function or Supabase tomorrow — is guaranteed coherent with the formula the
@@ -36,6 +54,7 @@ async function loadMock(): Promise<BriefingRun[]> {
   // Simulate async I/O so the loading path matches a real fetch.
   await new Promise((resolve) => setTimeout(resolve, 250));
   lastPayloadSource = 'mock';
+  lastGeneratedAt = '';
   return mockBriefings;
 }
 
@@ -47,6 +66,7 @@ async function loadNetlify(): Promise<BriefingRun[]> {
     throw new Error(`Netlify briefings function returned ${res.status} ${res.statusText}`);
   }
   lastPayloadSource = res.headers.get('x-signal-gate-source') ?? 'netlify';
+  lastGeneratedAt = res.headers.get('x-signal-gate-generated-at') ?? '';
   return (await res.json()) as BriefingRun[];
 }
 

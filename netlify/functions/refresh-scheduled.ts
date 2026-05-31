@@ -1,7 +1,8 @@
 /**
- * Scheduled function (cron). Every 6 hours it triggers the background generator
- * so the briefing stays fresh even with no visitors. It does no slow work
- * itself — it just kicks the background function and returns.
+ * Scheduled function (cron). Once a day it triggers the background generator so
+ * the briefing has a freshness floor even with no visitors. On-demand refresh
+ * (the app's "Actualizar foto del momento" button) covers everything else. It
+ * does no slow work itself — it just kicks the background function and returns.
  */
 
 export default async (): Promise<Response> => {
@@ -15,5 +16,5 @@ export default async (): Promise<Response> => {
   return new Response('regen triggered', { status: 200 });
 };
 
-// Netlify reads this to register the cron schedule.
-export const config = { schedule: '0 */6 * * *' };
+// Netlify reads this to register the cron schedule. Once a day at 06:00 UTC.
+export const config = { schedule: '0 6 * * *' };
