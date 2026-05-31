@@ -9,31 +9,50 @@ import { Radar } from './components/Radar';
 import { DiscardedNoise } from './components/DiscardedNoise';
 import { ActionMatrix } from './components/ActionMatrix';
 import { Thresholds } from './components/Thresholds';
-import { briefings, currentBriefing, previousBriefing } from './data/mockBriefings';
+import { getDataSourceId, loadBriefings } from './lib/briefingSource';
 import { useLastVisit } from './lib/useLastVisit';
 import type { BriefingRun } from './types/briefing';
 
-const sequence: BriefingRun[] = [previousBriefing, currentBriefing, ...briefings.slice(2)];
-
 export default function App() {
-  const [index, setIndex] = useState(1);
+  const [data, setData] = useState<BriefingRun[] | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [index, setIndex] = useState(0);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [justRefreshed, setJustRefreshed] = useState(false);
 
-  const briefing = sequence[index] ?? currentBriefing;
+  const dataSourceId = getDataSourceId();
+
+  useEffect(() => {
+    let active = true;
+    loadBriefings()
+      .then((b) => {
+        if (!active) return;
+        setData(b);
+        setIndex(Math.max(0, b.length - 1)); // open on the most recent snapshot
+      })
+      .catch((e) => {
+        if (active) setLoadError(e instanceof Error ? e.message : String(e));
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const sequence = useMemo(() => data ?? [], [data]);
+  const briefing = sequence.length ? sequence[index] ?? sequence[sequence.length - 1] : null;
   const { newChangeIds, lastVisitAt } = useLastVisit(sequence);
 
   const counts = useMemo(
     () => ({
-      demandToday: briefing.signals.filter((s) => s.signalScore >= 80).length,
-      monitor: briefing.signals.filter((s) => s.signalScore >= 60 && s.signalScore < 80).length,
-      ignored: briefing.discardedNoise.length,
+      demandToday: briefing ? briefing.signals.filter((s) => s.signalScore >= 80).length : 0,
+      monitor: briefing ? briefing.signals.filter((s) => s.signalScore >= 60 && s.signalScore < 80).length : 0,
+      ignored: briefing ? briefing.discardedNoise.length : 0,
     }),
     [briefing],
   );
 
   const newSinceVisit = useMemo(
-    () => briefing.changesSinceLastRun.filter((c) => newChangeIds.has(c.id)).length,
+    () => (briefing ? briefing.changesSinceLastRun.filter((c) => newChangeIds.has(c.id)).length : 0),
     [briefing, newChangeIds],
   );
 
@@ -44,7 +63,7 @@ export default function App() {
   }, [justRefreshed]);
 
   function handleRefresh() {
-    if (isRefreshing) return;
+    if (isRefreshing || sequence.length === 0) return;
     setIsRefreshing(true);
     const delay = 700 + Math.random() * 500;
     window.setTimeout(() => {
@@ -54,6 +73,14 @@ export default function App() {
     }, delay);
   }
 
+  if (loadError) {
+    return <CenteredNotice title="No se pudo cargar el snapshot" detail={loadError} tone="error" />;
+  }
+
+  if (!briefing) {
+    return <CenteredNotice title="Cargando snapshot…" detail={`Fuente de datos: ${dataSourceId}`} tone="muted" />;
+  }
+
   return (
     <div className="min-h-full flex flex-col">
       <Header
@@ -61,6 +88,7 @@ export default function App() {
         isRefreshing={isRefreshing}
         justRefreshed={justRefreshed}
         onRefresh={handleRefresh}
+        dataSourceId={dataSourceId}
       />
 
       <main className="flex-1 px-4 sm:px-6 lg:px-8 py-4 sm:py-6 max-w-[1440px] w-full mx-auto flex flex-col gap-4 sm:gap-5">
@@ -100,9 +128,22 @@ export default function App() {
         </div>
 
         <footer className="text-[11px] text-ink-muted py-4 text-center">
-          Signal Gate · mock snapshot · no live sources connected
+          Signal Gate · {dataSourceId} snapshot · {dataSourceId === 'mock' ? 'no live sources connected' : 'live'}
         </footer>
       </main>
+    </div>
+  );
+}
+
+function CenteredNotice({ title, detail, tone }: { title: string; detail: string; tone: 'error' | 'muted' }) {
+  const titleCls = tone === 'error' ? 'text-signal-alert' : 'text-ink-primary';
+  return (
+    <div className="min-h-full flex items-center justify-center p-8">
+      <div className="panel p-6 max-w-md w-full flex flex-col gap-2 text-center">
+        <span className="text-[11px] uppercase tracking-[0.14em] text-ink-muted">Signal Gate</span>
+        <h1 className={`text-[15px] font-medium tracking-tightish ${titleCls}`}>{title}</h1>
+        <p className="text-[12px] text-ink-secondary font-mono break-words">{detail}</p>
+      </div>
     </div>
   );
 }

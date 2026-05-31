@@ -119,11 +119,28 @@ function SignalCard({ signal }: { signal: Signal }) {
           <div className="flex flex-col gap-1">
             <span className="section-title">Sources</span>
             <ul className="flex flex-wrap gap-1.5">
-              {signal.sources.map((src) => (
-                <li key={src.id} className="chip font-mono text-[10.5px]">
-                  {src.label}
-                </li>
-              ))}
+              {signal.sources.map((src) =>
+                src.url ? (
+                  <li key={src.id}>
+                    <a
+                      href={src.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="chip font-mono text-[10.5px] hover:border-ink-faint hover:text-ink-primary"
+                    >
+                      {src.label} ↗
+                    </a>
+                  </li>
+                ) : (
+                  <li
+                    key={src.id}
+                    className="chip font-mono text-[10.5px]"
+                    title="Mock source — no live link until APIs are connected"
+                  >
+                    {src.label}
+                  </li>
+                ),
+              )}
             </ul>
           </div>
         </div>

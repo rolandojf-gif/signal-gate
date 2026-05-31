@@ -1,13 +1,22 @@
 import { formatTimestamp } from '../lib/format';
+import type { DataSourceId } from '../lib/briefingSource';
 
 type Props = {
   timestamp: string;
   isRefreshing: boolean;
   justRefreshed: boolean;
   onRefresh: () => void;
+  dataSourceId: DataSourceId;
 };
 
-export function Header({ timestamp, isRefreshing, justRefreshed, onRefresh }: Props) {
+const dataSourceLabel: Record<DataSourceId, string> = {
+  mock: 'Mock mode — API not connected yet',
+  netlify: 'Live · Netlify Functions',
+  supabase: 'Live · Supabase',
+};
+
+export function Header({ timestamp, isRefreshing, justRefreshed, onRefresh, dataSourceId }: Props) {
+  const isMock = dataSourceId === 'mock';
   return (
     <header className="hairline px-4 sm:px-6 lg:px-8 py-4 flex flex-col sm:flex-row sm:items-end sm:justify-between gap-4">
       <div className="flex flex-col gap-1">
@@ -20,8 +29,8 @@ export function Header({ timestamp, isRefreshing, justRefreshed, onRefresh }: Pr
         <div className="flex items-center gap-3 text-[11px] text-ink-muted">
           <span className="font-mono">last query — {formatTimestamp(timestamp)}</span>
           <span className="inline-flex items-center gap-1.5">
-            <span className="dot bg-signal-mute" />
-            Mock mode — API not connected yet
+            <span className={`dot ${isMock ? 'bg-signal-mute' : 'bg-signal-ok'}`} />
+            {dataSourceLabel[dataSourceId]}
           </span>
         </div>
       </div>

@@ -56,9 +56,12 @@ export function useLastVisit(briefings: BriefingRun[]) {
     return ids;
   }, [baseline, briefings]);
 
-  // On mount, record everything currently in the dataset as seen and stamp the
-  // visit time. Highlighting for this session still uses the mount-time baseline.
+  // Once the dataset is loaded, record everything currently in it as seen and
+  // stamp the visit time. Highlighting for this session still uses the
+  // mount-time baseline. Skip while data is still loading (empty) so we don't
+  // stamp a visit with nothing seen.
   useEffect(() => {
+    if (briefings.length === 0) return;
     const current = readStore();
     const merged = new Set(current.seenChangeIds);
     for (const b of briefings) {

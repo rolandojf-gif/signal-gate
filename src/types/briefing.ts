@@ -44,6 +44,11 @@ export type MockSource = {
   label: string;
   type: 'mock';
   note?: string;
+  /**
+   * Phase 2: when a real, traceable source is attached the UI renders the label
+   * as a link. Left undefined for mock sources so nothing pretends to be real.
+   */
+  url?: string;
 };
 
 export type ExecutiveVerdict = {
