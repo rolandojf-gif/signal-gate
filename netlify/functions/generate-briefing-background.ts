@@ -37,9 +37,13 @@ export default async (): Promise<Response> => {
     const message = err instanceof Error ? err.message : String(err);
     try {
       const store = getStore(STORE);
-      const existing = await store.get(KEY, { type: 'json' });
-      if (!existing) {
-        await store.setJSON(KEY, { generatedAt: Date.now(), source: 'mock', error: message.slice(0, 200), data: mockBriefings });
+      const existing = (await store.get(KEY, { type: 'json' })) as { grounded?: boolean } | null;
+      if (existing?.grounded) {
+        // Keep the last real (grounded) briefing; just record why the refresh failed.
+        await store.setJSON(KEY, { ...existing, error: message.slice(0, 200) });
+      } else {
+        // No trustworthy data — serve the honest mock, never stale ungrounded synthesis.
+        await store.setJSON(KEY, { generatedAt: Date.now(), source: 'mock', grounded: false, error: message.slice(0, 200), data: mockBriefings });
       }
     } catch {
       /* blobs unavailable */
@@ -58,23 +62,35 @@ async function generateCurrentBriefing(key: string): Promise<{ current: ReturnTy
     category: v.category as 'AI' | 'Geopolitics',
   }));
 
-  // Step 1 — grounded research (best effort).
+  // Step 1 — grounded research is REQUIRED (verifiability). Retry once on
+  // transient failures; if we still have no real web sources, give up rather
+  // than fabricate an unsourced briefing.
   let research = '';
   let sources: GroundSource[] = [];
-  try {
-    const r = await callGemini(key, MODEL, { user: researchPrompt(catalog, nowIso), grounded: true, temperature: 0.4 });
-    research = r.text;
-    sources = r.sources;
-  } catch {
-    research = '';
-    sources = [];
+  let researchError = 'no sources';
+  for (let attempt = 0; attempt < 2 && sources.length === 0; attempt++) {
+    try {
+      const r = await callGemini(key, MODEL, { user: researchPrompt(catalog, nowIso), grounded: true, temperature: 0.4 });
+      research = r.text;
+      sources = r.sources;
+      if (sources.length === 0) researchError = 'grounding returned no web sources';
+    } catch (e) {
+      researchError = e instanceof Error ? e.message : String(e);
+    }
+  }
+  if (sources.length === 0) {
+    throw new Error(`grounding failed: ${researchError}`);
   }
 
-  // Step 2 — structure into the briefing JSON.
-  const user = research ? structureWithResearch(catalog, nowIso, research, sources) : structureFromKnowledge(catalog, nowIso);
-  const s = await callGemini(key, MODEL, { system: systemInstruction(), user, json: true, temperature: 0.5 });
+  // Step 2 — structure the grounded research into the briefing JSON.
+  const s = await callGemini(key, MODEL, {
+    system: systemInstruction(),
+    user: structureWithResearch(catalog, nowIso, research, sources),
+    json: true,
+    temperature: 0.5,
+  });
   const raw = extractJson(s.text);
-  return { current: coerceBriefing(raw, nowIso, catalog, sources), grounded: research.length > 0 };
+  return { current: coerceBriefing(raw, nowIso, catalog, sources), grounded: true };
 }
 
 // --- Gemini call ------------------------------------------------------------
@@ -234,15 +250,6 @@ function structureWithResearch(catalog: Cat[], nowIso: string, research: string,
   ].join('\n');
 }
 
-function structureFromKnowledge(catalog: Cat[], nowIso: string): string {
-  return [
-    `Hoy es ${nowIso}. Produce el briefing ACTUAL como un único objeto JSON con tu mejor conocimiento.`,
-    '',
-    ...schemaBlock(catalog),
-    'No inventes URLs ni cites medios reales; en sources usa etiquetas genéricas y omite sourceIndex.',
-  ].join('\n');
-}
-
 // --- Parse + coerce ---------------------------------------------------------
 
 function extractJson(text: string): Record<string, unknown> {
@@ -309,6 +316,8 @@ function coerceBriefing(raw: Record<string, unknown>, nowIso: string, catalog: C
       const sig = (s ?? {}) as Record<string, unknown>;
       const category = oneOf(sig.category, CATEGORIES, 'AI');
       const v = resolveVar(sig.variableId, sig.variableName, category);
+      const sourceList = coerceSources(sig.sources, groundSources, i);
+      const verified = sourceList.length > 0;
       return {
         id: str(sig.id, `sig-gen-${i + 1}`),
         title: str(sig.title, 'Untitled signal'),
@@ -317,13 +326,13 @@ function coerceBriefing(raw: Record<string, unknown>, nowIso: string, catalog: C
         variableName: v.name,
         signalScore: clamp(sig.signalScore, 0),
         impactScore: clamp(sig.impactScore),
-        confidenceScore: clamp(sig.confidenceScore),
+        confidenceScore: verified ? clamp(sig.confidenceScore) : Math.min(clamp(sig.confidenceScore), 45),
         noveltyScore: clamp(sig.noveltyScore),
         actionabilityScore: clamp(sig.actionabilityScore),
         persistenceScore: clamp(sig.persistenceScore),
-        noiseRiskScore: clamp(sig.noiseRiskScore, 30),
+        noiseRiskScore: verified ? clamp(sig.noiseRiskScore, 30) : Math.max(clamp(sig.noiseRiskScore, 30), 55),
         level: oneOf(sig.level, LEVELS, 'medium'),
-        status: oneOf(sig.status, STATUSES, 'probable'),
+        status: verified ? oneOf(sig.status, STATUSES, 'probable') : 'inferred',
         timeHorizon: oneOf(sig.timeHorizon, HORIZONS, '7d'),
         whyItMatters: str(sig.whyItMatters, ''),
         summary: str(sig.summary, ''),
@@ -333,7 +342,7 @@ function coerceBriefing(raw: Record<string, unknown>, nowIso: string, catalog: C
         firstOrderConsequence: str(sig.firstOrderConsequence, ''),
         secondOrderConsequence: str(sig.secondOrderConsequence, ''),
         invalidationCriteria: strList(sig.invalidationCriteria),
-        sources: coerceSources(sig.sources, groundSources, i),
+        sources: verified ? sourceList : [{ id: `src-gen-${i + 1}-0`, label: 'Sin fuente verificable', type: 'mock' as const }],
       };
     });
   if (signals.length === 0) throw new Error('gemini returned no signals');
@@ -421,21 +430,18 @@ function coerceBriefing(raw: Record<string, unknown>, nowIso: string, catalog: C
   };
 }
 
-// Map model-emitted sources to real grounded URLs via sourceIndex; never trust
-// a model-emitted URL (could be hallucinated) — only attach uris we searched.
+// Keep ONLY sources that map to a real grounded URL via sourceIndex. Never let
+// the model's invented source names through — that would fake verifiability.
+// Returns [] when a signal has no real source (the caller then downgrades it).
 function coerceSources(raw: unknown, groundSources: GroundSource[], i: number) {
-  const list = arr(raw).map((src, j) => {
+  const list: { id: string; label: string; type: 'mock'; url: string }[] = [];
+  arr(raw).forEach((src, j) => {
     const o = (src ?? {}) as Record<string, unknown>;
     const idx = Number(o.sourceIndex);
     const g = Number.isInteger(idx) && idx >= 0 && idx < groundSources.length ? groundSources[idx] : null;
-    return {
-      id: `src-gen-${i + 1}-${j + 1}`,
-      label: g ? g.title : str(o.label, 'Gemini synthesis'),
-      type: 'mock' as const,
-      ...(g ? { url: g.uri } : {}),
-    };
+    if (g) list.push({ id: `src-gen-${i + 1}-${j + 1}`, label: g.title, type: 'mock', url: g.uri });
   });
-  return list.length ? list : [{ id: `src-gen-${i + 1}-1`, label: 'Gemini synthesis', type: 'mock' as const }];
+  return list;
 }
 
 type ScoredSignal = {

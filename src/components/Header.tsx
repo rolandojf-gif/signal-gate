@@ -16,7 +16,9 @@ type Props = {
 function describeSource(dataSourceId: DataSourceId, payloadSource?: string, grounded?: boolean): { label: string; dot: string } {
   const p = payloadSource ?? '';
   if (p.startsWith('gemini')) {
-    return { label: grounded ? 'Gemini + Google Search · fuentes reales' : 'Gemini · borrador en vivo', dot: 'bg-signal-ok' };
+    return grounded
+      ? { label: 'Gemini + Google Search · fuentes reales', dot: 'bg-signal-ok' }
+      : { label: 'Gemini · síntesis sin fuentes ⚠', dot: 'bg-signal-warn' };
   }
   if (dataSourceId === 'netlify') {
     return { label: 'Netlify Function · mock (fallback)', dot: 'bg-signal-info' };
