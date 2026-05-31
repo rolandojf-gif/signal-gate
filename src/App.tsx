@@ -9,12 +9,13 @@ import { Radar } from './components/Radar';
 import { DiscardedNoise } from './components/DiscardedNoise';
 import { ActionMatrix } from './components/ActionMatrix';
 import { Thresholds } from './components/Thresholds';
-import { getDataSourceId, loadBriefings } from './lib/briefingSource';
+import { getDataSourceId, getPayloadSource, loadBriefings } from './lib/briefingSource';
 import { useLastVisit } from './lib/useLastVisit';
 import type { BriefingRun } from './types/briefing';
 
 export default function App() {
   const [data, setData] = useState<BriefingRun[] | null>(null);
+  const [payloadSource, setPayloadSource] = useState<string>('');
   const [loadError, setLoadError] = useState<string | null>(null);
   const [index, setIndex] = useState(0);
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -28,6 +29,7 @@ export default function App() {
       .then((b) => {
         if (!active) return;
         setData(b);
+        setPayloadSource(getPayloadSource());
         setIndex(Math.max(0, b.length - 1)); // open on the most recent snapshot
       })
       .catch((e) => {
@@ -89,6 +91,7 @@ export default function App() {
         justRefreshed={justRefreshed}
         onRefresh={handleRefresh}
         dataSourceId={dataSourceId}
+        payloadSource={payloadSource}
       />
 
       <main className="flex-1 px-4 sm:px-6 lg:px-8 py-4 sm:py-6 max-w-[1440px] w-full mx-auto flex flex-col gap-4 sm:gap-5">

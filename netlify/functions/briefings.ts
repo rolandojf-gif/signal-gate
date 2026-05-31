@@ -1,4 +1,5 @@
 import { briefings as mockBriefings, previousBriefing } from '../../src/data/mockBriefings';
+import { computeSignalScore } from '../../src/lib/score';
 
 /**
  * Phase 2 data transport + first real AI integration.
@@ -16,19 +17,38 @@ import { briefings as mockBriefings, previousBriefing } from '../../src/data/moc
  * Endpoint: /.netlify/functions/briefings
  */
 
-const MODEL = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
+// flash-lite is the model that reliably finishes within Netlify's 10s sync
+// limit for this payload. Override with GEMINI_MODEL if quota/latency allows.
+const MODEL = process.env.GEMINI_MODEL || 'gemini-2.5-flash-lite';
 
 type Cat = { id: string; name: string; category: 'AI' | 'Geopolitics' };
+
+// Module-level caches survive across warm invocations of the same function
+// instance. They keep us from calling Gemini on every page load (which would
+// burn the free-tier quota) and from hammering it while it is rate-limited.
+const SUCCESS_TTL_MS = 10 * 60 * 1000;
+const COOLDOWN_MS = 60 * 1000;
+let success: { at: number; data: unknown } | null = null;
+let cooldownUntil = 0;
 
 export default async (): Promise<Response> => {
   const key = process.env.GEMINI_API_KEY;
   if (!key) {
     return jsonResponse(mockBriefings, 'mock-no-key');
   }
+  const now = Date.now();
+  if (success && now - success.at < SUCCESS_TTL_MS) {
+    return jsonResponse(success.data, 'gemini-cached');
+  }
+  if (now < cooldownUntil) {
+    return jsonResponse(mockBriefings, 'mock-cooldown');
+  }
   try {
-    const current = await generateCurrentBriefing(key);
-    return jsonResponse([previousBriefing, current], 'gemini');
+    const data = [previousBriefing, await generateCurrentBriefing(key)];
+    success = { at: now, data };
+    return jsonResponse(data, 'gemini');
   } catch (err) {
+    cooldownUntil = now + COOLDOWN_MS;
     const message = err instanceof Error ? err.message : String(err);
     return jsonResponse(mockBriefings, 'mock-fallback', message);
   }
@@ -40,7 +60,9 @@ function jsonResponse(body: unknown, source: string, error?: string): Response {
     'cache-control': 'no-store',
     'x-signal-gate-source': source,
   };
-  if (error) headers['x-signal-gate-error'] = error.slice(0, 200);
+  // Header values cannot contain newlines or non-ASCII control chars — Gemini
+  // error bodies do, so sanitize before this becomes a 502.
+  if (error) headers['x-signal-gate-error'] = error.replace(/[^\x20-\x7E]/g, ' ').slice(0, 180);
   return new Response(JSON.stringify(body), { status: 200, headers });
 }
 
@@ -61,7 +83,17 @@ async function generateCurrentBriefing(key: string): Promise<unknown> {
 
 async function callGemini(key: string, model: string, system: string, user: string): Promise<string> {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 9000);
+  const timeout = setTimeout(() => controller.abort(), 9700);
+  // Gemini 2.5 models "think" by default, which blows past Netlify's 10s sync
+  // limit. Disable it so the call returns in a few seconds.
+  const generationConfig: Record<string, unknown> = {
+    responseMimeType: 'application/json',
+    temperature: 0.6,
+    maxOutputTokens: 3072,
+  };
+  if (model.includes('2.5')) {
+    generationConfig.thinkingConfig = { thinkingBudget: 0 };
+  }
   try {
     const res = await fetch(
       `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`,
@@ -72,7 +104,7 @@ async function callGemini(key: string, model: string, system: string, user: stri
         body: JSON.stringify({
           systemInstruction: { parts: [{ text: system }] },
           contents: [{ role: 'user', parts: [{ text: user }] }],
-          generationConfig: { responseMimeType: 'application/json', temperature: 0.6, maxOutputTokens: 8192 },
+          generationConfig,
         }),
       },
     );
@@ -129,13 +161,13 @@ function userPrompt(catalog: Cat[], nowIso: string): string {
     '  "signals": [ { "id": "sig-...", "title": str, "category":"AI|Geopolitics", "variableId": one-of-catalog, "variableName": str, "impactScore":0-100, "confidenceScore":0-100, "noveltyScore":0-100, "actionabilityScore":0-100, "persistenceScore":0-100, "noiseRiskScore":0-100, "level":"critical|high|medium|low", "status":"confirmed|probable|rumor|inferred", "timeHorizon":"24h|72h|7d|30d|structural", "whyItMatters": str, "summary": str, "winners":[str], "pressuredActors":[str], "newIncentive": str, "firstOrderConsequence": str, "secondOrderConsequence": str, "invalidationCriteria":[str], "sources":[{"id":str,"label":"MOCK: ...","type":"mock"}] } ],',
     '  "changesSinceLastRun": [ { "id":"ch-...", "type":"new|confirmed|weakened|discarded|escalated|degraded", "category":"AI|Geopolitics", "title": str, "previousState": str, "currentState": str, "explanation": str, "impact":"low|medium|high|critical", "relatedSignalId": optional sig-id, "relatedVariableId": optional catalog-id } ],',
     '  "discardedNoise": [ { "id":"disc-...", "title": str, "reason":"hype|rumor|repetition|emotional_not_actionable|no_hard_variable|not_verifiable", "noiseLevel":"low|medium|high", "discardRationale": str } ],',
-    '  "actionMatrix": { "nervousSystem":[str], "monitorCalmly":[str], "ignore":[str] },',
     '  "thresholds": [ { "id":"th-...", "condition": str, "consequence": str, "inverseCondition": optional str, "inverseConsequence": optional str, "relatedVariableId": optional catalog-id, "relatedSignalId": optional sig-id } ]',
     '}',
     '',
-    'Rules: 3 to 7 signals, only the most decision-relevant current AI/geopolitics dynamics.',
-    'Do not pad. nervousSystem items must correspond to signals scoring >=80; monitorCalmly to 60-79; ignore to discarded noise.',
-    'Make scores internally consistent with the signalScore formula and the entry thresholds.',
+    'Rules: EXACTLY 3 signals, the most decision-relevant current AI/geopolitics dynamics.',
+    'Every prose field = ONE short sentence. Max 1 winner, 1 pressuredActor, 1 invalidationCriterion. Omit sources.',
+    'Max 2 changes, 2 discarded items, 2 thresholds. Be very terse — must fit a 10s budget.',
+    'Score signals so only genuine nervous-system items reach >=80; do not pad.',
   ].join('\n');
 }
 
@@ -288,7 +320,6 @@ function coerceBriefing(raw: Record<string, unknown>, nowIso: string, catalog: C
 
   const verdict = (raw.executiveVerdict ?? {}) as Record<string, unknown>;
   const levels = (raw.signalLevels ?? {}) as Record<string, Record<string, unknown>>;
-  const matrix = (raw.actionMatrix ?? {}) as Record<string, unknown>;
   const levelBlock = (b: Record<string, unknown> | undefined, allowed: readonly string[], d: string) => ({
     level: oneOf(b?.level, allowed as readonly string[], d),
     explanation: str(b?.explanation, ''),
@@ -315,26 +346,43 @@ function coerceBriefing(raw: Record<string, unknown>, nowIso: string, catalog: C
     signals,
     variableRadar: deriveRadar(catalog, signals, discardedNoise, nowIso),
     discardedNoise,
-    actionMatrix: {
-      nervousSystem: strList(matrix.nervousSystem),
-      monitorCalmly: strList(matrix.monitorCalmly),
-      ignore: strList(matrix.ignore),
-    },
+    actionMatrix: deriveMatrix(signals, discardedNoise),
     thresholds,
+  };
+}
+
+type ScoredSignal = {
+  id: string;
+  title: string;
+  variableId: string;
+  whyItMatters: string;
+  impactScore: number;
+  confidenceScore: number;
+  noveltyScore: number;
+  actionabilityScore: number;
+  persistenceScore: number;
+  noiseRiskScore: number;
+};
+
+// Action matrix is derived from the signals (using the same score formula the
+// client applies) so the three columns can't contradict the signal tiers.
+function deriveMatrix(signals: ScoredSignal[], discarded: { title: string }[]) {
+  return {
+    nervousSystem: signals.filter((s) => computeSignalScore(s) >= 80).map((s) => s.title),
+    monitorCalmly: signals.filter((s) => {
+      const v = computeSignalScore(s);
+      return v >= 60 && v < 80;
+    }).map((s) => s.title),
+    ignore: discarded.map((d) => d.title),
   };
 }
 
 // Radar is derived from signals (not asked of the model) so it stays perfectly
 // coherent with them and every relatedSignalId resolves.
-function deriveRadar(
-  catalog: Cat[],
-  signals: { id: string; variableId: string; signalScore: number; whyItMatters: string }[],
-  discarded: { title: string }[],
-  nowIso: string,
-) {
+function deriveRadar(catalog: Cat[], signals: ScoredSignal[], discarded: { title: string }[], nowIso: string) {
   return catalog.map((c) => {
     const related = signals.filter((s) => s.variableId === c.id);
-    const top = related.reduce<number>((m, s) => Math.max(m, s.signalScore), 0);
+    const top = related.reduce<number>((m, s) => Math.max(m, computeSignalScore(s)), 0);
     const mentionedAsNoise =
       related.length === 0 && discarded.some((d) => d.title.toLowerCase().includes(c.name.toLowerCase().split(' ')[0]));
 

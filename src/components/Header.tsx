@@ -7,19 +7,23 @@ type Props = {
   justRefreshed: boolean;
   onRefresh: () => void;
   dataSourceId: DataSourceId;
+  payloadSource?: string;
 };
 
-const dataSourceLabel: Record<DataSourceId, string> = {
-  mock: 'Mock mode — bundled data',
-  netlify: 'Netlify Function · mock payload',
-  supabase: 'Supabase · live data',
-};
+// Describe what actually produced the data. ok (green) = genuine AI/live data;
+// info (blue) = function wired but serving the mock fallback; mute = bundled.
+function describeSource(dataSourceId: DataSourceId, payloadSource?: string): { label: string; dot: string } {
+  const p = payloadSource ?? '';
+  if (p.startsWith('gemini')) return { label: 'Gemini · borrador en vivo', dot: 'bg-signal-ok' };
+  if (dataSourceId === 'netlify') {
+    return { label: 'Netlify Function · mock (fallback)', dot: 'bg-signal-info' };
+  }
+  if (dataSourceId === 'supabase') return { label: 'Supabase · live data', dot: 'bg-signal-ok' };
+  return { label: 'Mock mode — bundled data', dot: 'bg-signal-mute' };
+}
 
-export function Header({ timestamp, isRefreshing, justRefreshed, onRefresh, dataSourceId }: Props) {
-  // mute = bundled mock; info = wired through a function but payload is still
-  // mock; ok = genuinely live data.
-  const dotCls =
-    dataSourceId === 'mock' ? 'bg-signal-mute' : dataSourceId === 'netlify' ? 'bg-signal-info' : 'bg-signal-ok';
+export function Header({ timestamp, isRefreshing, justRefreshed, onRefresh, dataSourceId, payloadSource }: Props) {
+  const sourceInfo = describeSource(dataSourceId, payloadSource);
   return (
     <header className="hairline px-4 sm:px-6 lg:px-8 py-4 flex flex-col sm:flex-row sm:items-end sm:justify-between gap-4">
       <div className="flex flex-col gap-1">
@@ -32,8 +36,8 @@ export function Header({ timestamp, isRefreshing, justRefreshed, onRefresh, data
         <div className="flex items-center gap-3 text-[11px] text-ink-muted">
           <span className="font-mono">last query — {formatTimestamp(timestamp)}</span>
           <span className="inline-flex items-center gap-1.5">
-            <span className={`dot ${dotCls}`} />
-            {dataSourceLabel[dataSourceId]}
+            <span className={`dot ${sourceInfo.dot}`} />
+            {sourceInfo.label}
           </span>
         </div>
       </div>

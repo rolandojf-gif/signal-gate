@@ -11,6 +11,14 @@ export function getDataSourceId(): DataSourceId {
   return SOURCE;
 }
 
+// What actually produced the last payload, read from the function's
+// x-signal-gate-source header (gemini | gemini-cached | mock-*). Lets the UI
+// label the source honestly instead of assuming.
+let lastPayloadSource = 'mock';
+export function getPayloadSource(): string {
+  return lastPayloadSource;
+}
+
 /**
  * Re-derive signalScore from its parts so *any* backend — mock today, a Netlify
  * Function or Supabase tomorrow — is guaranteed coherent with the formula the
@@ -27,6 +35,7 @@ export function normalizeBriefings(briefings: BriefingRun[]): BriefingRun[] {
 async function loadMock(): Promise<BriefingRun[]> {
   // Simulate async I/O so the loading path matches a real fetch.
   await new Promise((resolve) => setTimeout(resolve, 250));
+  lastPayloadSource = 'mock';
   return mockBriefings;
 }
 
@@ -37,6 +46,7 @@ async function loadNetlify(): Promise<BriefingRun[]> {
   if (!res.ok) {
     throw new Error(`Netlify briefings function returned ${res.status} ${res.statusText}`);
   }
+  lastPayloadSource = res.headers.get('x-signal-gate-source') ?? 'netlify';
   return (await res.json()) as BriefingRun[];
 }
 
