@@ -1,4 +1,5 @@
 import type { BriefingRun, RadarVariable, Signal } from '../types/briefing';
+import { computeSignalScore } from '../lib/score';
 
 const baseVariables: Omit<RadarVariable, 'status' | 'trend' | 'explanation' | 'lastUpdated' | 'relatedSignalIds'>[] = [
   { id: 'var-ai-frontier', name: 'Frontier models', category: 'AI' },
@@ -391,7 +392,7 @@ export const previousBriefing: BriefingRun = {
     changeSinceLastRun: { level: 'minor', explanation: 'HBM language hardened; nothing else moved.' },
   },
   changesSinceLastRun: [],
-  signals: previousSignals,
+  signals: deriveScores(previousSignals),
   variableRadar: previousRadar,
   discardedNoise: [
     {
@@ -546,7 +547,7 @@ export const currentBriefing: BriefingRun = {
       impact: 'low',
     },
   ],
-  signals: currentSignals,
+  signals: deriveScores(currentSignals),
   variableRadar: currentRadar,
   discardedNoise: [
     {
@@ -678,20 +679,8 @@ export const currentBriefing: BriefingRun = {
 
 export const briefings: BriefingRun[] = [previousBriefing, currentBriefing];
 
-export function computeSignalScoreFromParts(p: {
-  impactScore: number;
-  confidenceScore: number;
-  noveltyScore: number;
-  actionabilityScore: number;
-  persistenceScore: number;
-  noiseRiskScore: number;
-}): number {
-  const raw =
-    0.30 * p.impactScore +
-    0.25 * p.confidenceScore +
-    0.20 * p.noveltyScore +
-    0.15 * p.actionabilityScore +
-    0.10 * p.persistenceScore -
-    0.20 * p.noiseRiskScore;
-  return Math.max(0, Math.min(100, Math.round(raw)));
+// Single source of truth for signalScore: derive it from the parts so the
+// stored value can never drift from the formula shown in the UI.
+function deriveScores(signals: Signal[]): Signal[] {
+  return signals.map((s) => ({ ...s, signalScore: computeSignalScore(s) }));
 }

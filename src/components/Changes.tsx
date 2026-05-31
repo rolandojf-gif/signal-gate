@@ -3,9 +3,10 @@ import { changeTypeToken, impactColor } from '../lib/tokens';
 
 type Props = {
   changes: ChangeItem[];
+  newChangeIds?: Set<string>;
 };
 
-export function Changes({ changes }: Props) {
+export function Changes({ changes, newChangeIds }: Props) {
   return (
     <section aria-label="Changes since last query" className="panel p-4 sm:p-5 flex flex-col gap-4">
       <div className="flex items-center justify-between">
@@ -19,6 +20,7 @@ export function Changes({ changes }: Props) {
         <ul className="flex flex-col divide-y divide-bg-line">
           {changes.map((c) => {
             const t = changeTypeToken[c.type];
+            const isNew = newChangeIds?.has(c.id) ?? false;
             return (
               <li key={c.id} className="py-3 first:pt-0 last:pb-0 flex flex-col gap-2">
                 <div className="flex items-start justify-between gap-3 flex-wrap">
@@ -26,6 +28,12 @@ export function Changes({ changes }: Props) {
                     <span className={`chip uppercase tracking-[0.1em] ${t.cls}`}>{t.label}</span>
                     <span className="chip">{c.category}</span>
                     <span className={`text-[11px] ${impactColor[c.impact]}`}>impact: {c.impact}</span>
+                    {isNew && (
+                      <span className="chip border-signal-info/50 text-signal-info">
+                        <span className="dot bg-signal-info" />
+                        nuevo desde tu última visita
+                      </span>
+                    )}
                   </div>
                 </div>
                 <h3 className="text-[14px] font-medium tracking-tightish text-ink-primary">{c.title}</h3>

@@ -6,6 +6,9 @@ import {
   signalStatusLabel,
   timeHorizonLabel,
 } from '../lib/tokens';
+import { SCORE_WEIGHTS, computeSignalScore } from '../lib/score';
+
+type Tier = 'nervous' | 'monitor' | 'below';
 
 type Props = {
   signals: Signal[];
@@ -54,13 +57,8 @@ function SignalCard({ signal }: { signal: Signal }) {
 
   return (
     <li className={`border ${containerCls} rounded-md`}>
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        className="w-full text-left px-3.5 py-3 flex flex-col gap-2"
-        aria-expanded={open}
-      >
-        <div className="flex items-start justify-between gap-3 flex-wrap">
+      <div className="px-3.5 py-3 flex flex-col gap-2">
+        <div className="flex items-start justify-between gap-3">
           <div className="flex items-center gap-2 flex-wrap">
             <span className="chip">{signal.category}</span>
             <span className={`chip ${priority.cls}`}>{priority.label}</span>
@@ -76,15 +74,25 @@ function SignalCard({ signal }: { signal: Signal }) {
               </span>
             )}
           </div>
-          <div className="flex items-center gap-2">
-            <ScoreBar score={signal.signalScore} tier={tier} />
-            <span className="text-[12px] font-mono text-ink-muted">{open ? '−' : '+'}</span>
+          <div className="flex items-center gap-2 shrink-0">
+            <ScorePopover signal={signal} tier={tier} />
+            <button
+              type="button"
+              onClick={() => setOpen((v) => !v)}
+              aria-expanded={open}
+              aria-label={open ? 'Collapse signal' : 'Expand signal'}
+              className="text-[13px] font-mono text-ink-muted hover:text-ink-primary w-5 h-5 flex items-center justify-center"
+            >
+              {open ? '−' : '+'}
+            </button>
           </div>
         </div>
 
-        <h3 className="text-[14px] font-medium tracking-tightish text-ink-primary">{signal.title}</h3>
-        <p className="text-[12.5px] leading-snug text-ink-secondary">{signal.whyItMatters}</p>
-      </button>
+        <button type="button" onClick={() => setOpen((v) => !v)} className="text-left flex flex-col gap-1">
+          <h3 className="text-[14px] font-medium tracking-tightish text-ink-primary">{signal.title}</h3>
+          <p className="text-[12.5px] leading-snug text-ink-secondary">{signal.whyItMatters}</p>
+        </button>
+      </div>
 
       {open && (
         <div className="px-3.5 pb-4 pt-1 flex flex-col gap-4 border-t border-bg-line">
@@ -124,15 +132,70 @@ function SignalCard({ signal }: { signal: Signal }) {
   );
 }
 
-function ScoreBar({ score, tier }: { score: number; tier: 'nervous' | 'monitor' | 'below' }) {
-  const color =
+function ScorePopover({ signal, tier }: { signal: Signal; tier: Tier }) {
+  const [open, setOpen] = useState(false);
+  const barColor =
     tier === 'nervous' ? 'bg-signal-alert' : tier === 'monitor' ? 'bg-signal-warn' : 'bg-signal-mute';
+  const total = computeSignalScore(signal);
+
   return (
-    <div className="flex items-center gap-1.5 min-w-[80px]">
-      <div className="h-1.5 w-12 bg-bg-line rounded-sm overflow-hidden">
-        <div className={`h-full ${color}`} style={{ width: `${Math.max(2, score)}%` }} />
-      </div>
-      <span className="text-[12px] font-mono text-ink-primary tabular-nums w-7 text-right">{score}</span>
+    <div className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        title="Ver derivación del score"
+        className="flex items-center gap-1.5 group"
+      >
+        <span className="h-1.5 w-12 bg-bg-line rounded-sm overflow-hidden inline-block">
+          <span className={`block h-full ${barColor}`} style={{ width: `${Math.max(2, signal.signalScore)}%` }} />
+        </span>
+        <span className="text-[12px] font-mono tabular-nums text-ink-primary w-7 text-right">{signal.signalScore}</span>
+        <span className="text-[10px] text-ink-muted group-hover:text-ink-secondary">ⓘ</span>
+      </button>
+
+      {open && (
+        <>
+          <button
+            type="button"
+            aria-hidden
+            tabIndex={-1}
+            onClick={() => setOpen(false)}
+            className="fixed inset-0 z-10 cursor-default"
+          />
+          <div className="absolute right-0 top-full mt-1.5 z-20 w-64 panel-hi p-3 flex flex-col gap-2 shadow-xl shadow-black/40">
+            <div className="flex items-center justify-between">
+              <span className="section-title">Signal score</span>
+              <span className="text-[10px] text-signal-ok">✓ derived from formula</span>
+            </div>
+            <ul className="flex flex-col gap-1">
+              {SCORE_WEIGHTS.map((w) => {
+                const v = signal[w.key];
+                const c = w.weight * v;
+                return (
+                  <li key={w.key} className="flex items-center justify-between gap-2 text-[11px] font-mono">
+                    <span className="text-ink-secondary flex-1">{w.label}</span>
+                    <span className="text-ink-muted">
+                      {w.weight.toFixed(2)}×{v}
+                    </span>
+                    <span className={`tabular-nums w-12 text-right ${c < 0 ? 'text-signal-alert' : 'text-ink-primary'}`}>
+                      {c < 0 ? '−' : '+'}
+                      {Math.abs(c).toFixed(1)}
+                    </span>
+                  </li>
+                );
+              })}
+            </ul>
+            <div className="flex items-center justify-between border-t border-bg-line pt-1.5 text-[12px] font-mono">
+              <span className="text-ink-secondary">signalScore</span>
+              <span className="tabular-nums text-ink-primary">{total}</span>
+            </div>
+            <p className="text-[10.5px] leading-snug text-ink-muted">
+              {'≥80 entra al sistema nervioso · 60–79 monitorizar · <60 fuera.'}
+            </p>
+          </div>
+        </>
+      )}
     </div>
   );
 }
