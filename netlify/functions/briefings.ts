@@ -16,7 +16,7 @@ const KEY = 'latest';
 const STALE_MS = 24 * 60 * 60 * 1000; // passive floor: regenerate if older than a day
 const TRIGGER_COOLDOWN_MS = 2 * 60 * 1000; // don't fire regen more than once / 2 min per instance
 
-type StoredBriefing = { generatedAt?: number; source?: string; data?: unknown; error?: string };
+type StoredBriefing = { generatedAt?: number; source?: string; data?: unknown; error?: string; grounded?: boolean };
 
 let lastTriggerAt = 0;
 
@@ -44,7 +44,7 @@ export default async (): Promise<Response> => {
   }
 
   if (hasData) {
-    return jsonResponse(stored!.data, stored!.source ?? 'blob', generatedAt, stored?.error);
+    return jsonResponse(stored!.data, stored!.source ?? 'blob', generatedAt, stored?.error, stored?.grounded === true);
   }
   return jsonResponse(mockBriefings, 'mock', 0);
 };
@@ -59,12 +59,13 @@ async function triggerRegen(): Promise<void> {
   }
 }
 
-function jsonResponse(body: unknown, source: string, generatedAt: number, error?: string): Response {
+function jsonResponse(body: unknown, source: string, generatedAt: number, error?: string, grounded?: boolean): Response {
   const headers: Record<string, string> = {
     'content-type': 'application/json; charset=utf-8',
     'cache-control': 'no-store',
     'x-signal-gate-source': source,
     'x-signal-gate-generated-at': generatedAt ? new Date(generatedAt).toISOString() : 'never',
+    'x-signal-gate-grounded': grounded ? 'true' : 'false',
   };
   if (error) headers['x-signal-gate-error'] = error.replace(/[^\x20-\x7E]/g, ' ').slice(0, 180);
   return new Response(JSON.stringify(body), { status: 200, headers });

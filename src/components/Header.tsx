@@ -8,13 +8,16 @@ type Props = {
   onRefresh: () => void;
   dataSourceId: DataSourceId;
   payloadSource?: string;
+  grounded?: boolean;
 };
 
 // Describe what actually produced the data. ok (green) = genuine AI/live data;
 // info (blue) = function wired but serving the mock fallback; mute = bundled.
-function describeSource(dataSourceId: DataSourceId, payloadSource?: string): { label: string; dot: string } {
+function describeSource(dataSourceId: DataSourceId, payloadSource?: string, grounded?: boolean): { label: string; dot: string } {
   const p = payloadSource ?? '';
-  if (p.startsWith('gemini')) return { label: 'Gemini · borrador en vivo', dot: 'bg-signal-ok' };
+  if (p.startsWith('gemini')) {
+    return { label: grounded ? 'Gemini + Google Search · fuentes reales' : 'Gemini · borrador en vivo', dot: 'bg-signal-ok' };
+  }
   if (dataSourceId === 'netlify') {
     return { label: 'Netlify Function · mock (fallback)', dot: 'bg-signal-info' };
   }
@@ -22,8 +25,8 @@ function describeSource(dataSourceId: DataSourceId, payloadSource?: string): { l
   return { label: 'Mock mode — bundled data', dot: 'bg-signal-mute' };
 }
 
-export function Header({ timestamp, isRefreshing, justRefreshed, onRefresh, dataSourceId, payloadSource }: Props) {
-  const sourceInfo = describeSource(dataSourceId, payloadSource);
+export function Header({ timestamp, isRefreshing, justRefreshed, onRefresh, dataSourceId, payloadSource, grounded }: Props) {
+  const sourceInfo = describeSource(dataSourceId, payloadSource, grounded);
   return (
     <header className="hairline px-4 sm:px-6 lg:px-8 py-4 flex flex-col sm:flex-row sm:items-end sm:justify-between gap-4">
       <div className="flex flex-col gap-1">

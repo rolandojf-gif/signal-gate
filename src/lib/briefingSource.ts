@@ -26,6 +26,12 @@ export function getPayloadGeneratedAt(): string {
   return lastGeneratedAt;
 }
 
+// Whether the last payload was grounded in real Google Search sources.
+let lastGrounded = false;
+export function getPayloadGrounded(): boolean {
+  return lastGrounded;
+}
+
 // On-demand: ask the background function to generate a fresh briefing. Returns
 // immediately (the work runs server-side); poll loadBriefings() for the result.
 export async function requestRegeneration(): Promise<void> {
@@ -55,6 +61,7 @@ async function loadMock(): Promise<BriefingRun[]> {
   await new Promise((resolve) => setTimeout(resolve, 250));
   lastPayloadSource = 'mock';
   lastGeneratedAt = '';
+  lastGrounded = false;
   return mockBriefings;
 }
 
@@ -67,6 +74,7 @@ async function loadNetlify(): Promise<BriefingRun[]> {
   }
   lastPayloadSource = res.headers.get('x-signal-gate-source') ?? 'netlify';
   lastGeneratedAt = res.headers.get('x-signal-gate-generated-at') ?? '';
+  lastGrounded = res.headers.get('x-signal-gate-grounded') === 'true';
   return (await res.json()) as BriefingRun[];
 }
 

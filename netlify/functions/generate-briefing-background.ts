@@ -3,37 +3,38 @@ import { briefings as mockBriefings, previousBriefing } from '../../src/data/moc
 import { computeSignalScore } from '../../src/lib/score';
 
 /**
- * Background function (up to 15 minutes) — this is where the slow work lives.
- * It asks Gemini for the FULL, rich current briefing under the Signal Gate
- * doctrine and writes [previous, current] to Netlify Blobs. The synchronous
- * /briefings endpoint only ever reads that blob, so it never hits the 10s limit.
+ * Background function (up to 15 minutes). Two-step generation:
+ *   1) Grounded research — Gemini with the google_search tool finds the real,
+ *      current AI/geopolitics developments and returns text + real sources.
+ *   2) Structuring — a second (JSON) call turns that research into the full
+ *      Signal Gate briefing, attaching the real source URLs to each signal.
  *
- * Triggered by:
- *  - the scheduled function (cron), and
- *  - the sync endpoint when the stored briefing is missing or stale.
+ * Grounding can't run together with JSON response mode, hence the two calls.
+ * Falls back to ungrounded generation, then to mock, so the site never breaks.
  *
- * Invoke: POST /.netlify/functions/generate-briefing-background  (returns 202).
+ * Writes [previous, current] to Netlify Blobs. The sync /briefings endpoint
+ * only reads that blob.
  */
 
-const MODEL = process.env.GEMINI_MODEL || 'gemini-2.5-flash-lite';
+const MODEL = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
 const STORE = 'signal-gate';
 const KEY = 'latest';
 
 type Cat = { id: string; name: string; category: 'AI' | 'Geopolitics' };
+type GroundSource = { title: string; uri: string };
 
 export default async (): Promise<Response> => {
   const key = process.env.GEMINI_API_KEY;
   if (!key) return new Response('skipped: no GEMINI_API_KEY', { status: 200 });
 
   try {
-    const current = await generateCurrentBriefing(key);
+    const { current, grounded } = await generateCurrentBriefing(key);
     const data = [previousBriefing, current];
     const store = getStore(STORE);
-    await store.setJSON(KEY, { generatedAt: Date.now(), source: 'gemini', model: MODEL, data });
-    return new Response(`ok: generated ${current.signals.length} signals`, { status: 200 });
+    await store.setJSON(KEY, { generatedAt: Date.now(), source: 'gemini', model: MODEL, grounded, data });
+    return new Response(`ok: ${current.signals.length} signals, grounded=${grounded}`, { status: 200 });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    // Persist a mock so the site has something coherent even if generation fails.
     try {
       const store = getStore(STORE);
       const existing = await store.get(KEY, { type: 'json' });
@@ -41,64 +42,106 @@ export default async (): Promise<Response> => {
         await store.setJSON(KEY, { generatedAt: Date.now(), source: 'mock', error: message.slice(0, 200), data: mockBriefings });
       }
     } catch {
-      /* blobs unavailable — nothing else to do */
+      /* blobs unavailable */
     }
     return new Response(`error: ${message.slice(0, 300)}`, { status: 200 });
   }
 };
 
-// --- Gemini call ------------------------------------------------------------
+// --- Two-step generation ----------------------------------------------------
 
-async function generateCurrentBriefing(key: string): Promise<ReturnType<typeof coerceBriefing>> {
+async function generateCurrentBriefing(key: string): Promise<{ current: ReturnType<typeof coerceBriefing>; grounded: boolean }> {
   const nowIso = new Date().toISOString();
   const catalog: Cat[] = previousBriefing.variableRadar.map((v) => ({
     id: v.id,
     name: v.name,
     category: v.category as 'AI' | 'Geopolitics',
   }));
-  const text = await callGemini(key, MODEL, systemInstruction(), userPrompt(catalog, nowIso));
-  const raw = extractJson(text);
-  return coerceBriefing(raw, nowIso, catalog);
+
+  // Step 1 — grounded research (best effort).
+  let research = '';
+  let sources: GroundSource[] = [];
+  try {
+    const r = await callGemini(key, MODEL, { user: researchPrompt(nowIso), grounded: true, temperature: 0.4 });
+    research = r.text;
+    sources = r.sources;
+  } catch {
+    research = '';
+    sources = [];
+  }
+
+  // Step 2 — structure into the briefing JSON.
+  const user = research ? structureWithResearch(catalog, nowIso, research, sources) : structureFromKnowledge(catalog, nowIso);
+  const s = await callGemini(key, MODEL, { system: systemInstruction(), user, json: true, temperature: 0.5 });
+  const raw = extractJson(s.text);
+  return { current: coerceBriefing(raw, nowIso, catalog, sources), grounded: research.length > 0 };
 }
 
-async function callGemini(key: string, model: string, system: string, user: string): Promise<string> {
+// --- Gemini call ------------------------------------------------------------
+
+type CallOpts = { system?: string; user: string; json?: boolean; grounded?: boolean; temperature?: number };
+
+async function callGemini(key: string, model: string, opts: CallOpts): Promise<{ text: string; sources: GroundSource[] }> {
   const controller = new AbortController();
-  // Background functions allow up to 15 minutes, so give Gemini real room.
   const timeout = setTimeout(() => controller.abort(), 120000);
   const generationConfig: Record<string, unknown> = {
-    responseMimeType: 'application/json',
-    temperature: 0.6,
-    maxOutputTokens: 8192,
+    temperature: opts.temperature ?? 0.5,
+    maxOutputTokens: opts.json ? 8192 : 4096,
   };
-  if (model.includes('2.5')) generationConfig.thinkingConfig = { thinkingBudget: 0 };
+  if (opts.json) generationConfig.responseMimeType = 'application/json';
+  // Disable "thinking" only on the JSON step so it doesn't eat the output
+  // budget; allow it on the research step for better reasoning.
+  if (model.includes('2.5') && opts.json) generationConfig.thinkingConfig = { thinkingBudget: 0 };
+
+  const body: Record<string, unknown> = {
+    contents: [{ role: 'user', parts: [{ text: opts.user }] }],
+    generationConfig,
+  };
+  if (opts.system) body.systemInstruction = { parts: [{ text: opts.system }] };
+  if (opts.grounded) body.tools = [{ google_search: {} }];
+
   try {
-    const res = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`,
-      {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        signal: controller.signal,
-        body: JSON.stringify({
-          systemInstruction: { parts: [{ text: system }] },
-          contents: [{ role: 'user', parts: [{ text: user }] }],
-          generationConfig,
-        }),
-      },
-    );
+    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      signal: controller.signal,
+      body: JSON.stringify(body),
+    });
     if (!res.ok) {
-      const body = await res.text();
-      throw new Error(`gemini ${res.status}: ${body.slice(0, 180)}`);
+      const errBody = await res.text();
+      throw new Error(`gemini ${res.status}: ${errBody.slice(0, 180)}`);
     }
-    const data = (await res.json()) as { candidates?: { content?: { parts?: { text?: string }[] } }[] };
-    const out = data.candidates?.[0]?.content?.parts?.map((p) => p.text ?? '').join('') ?? '';
-    if (!out.trim()) throw new Error('empty gemini response');
-    return out;
+    const data = (await res.json()) as { candidates?: Candidate[] };
+    const candidate = data.candidates?.[0];
+    const text = candidate?.content?.parts?.map((p) => p.text ?? '').join('') ?? '';
+    if (!text.trim()) throw new Error('empty gemini response');
+    return { text, sources: extractGroundingSources(candidate) };
   } finally {
     clearTimeout(timeout);
   }
 }
 
-// --- Prompt (rich — no 10s budget here) -------------------------------------
+type Candidate = {
+  content?: { parts?: { text?: string }[] };
+  groundingMetadata?: { groundingChunks?: { web?: { uri?: string; title?: string } }[] };
+};
+
+function extractGroundingSources(candidate: Candidate | undefined): GroundSource[] {
+  const chunks = candidate?.groundingMetadata?.groundingChunks ?? [];
+  const out: GroundSource[] = [];
+  const seen = new Set<string>();
+  for (const c of chunks) {
+    const uri = c?.web?.uri;
+    const title = c?.web?.title;
+    if (typeof uri === 'string' && uri && !seen.has(uri)) {
+      seen.add(uri);
+      out.push({ uri, title: typeof title === 'string' && title ? title : uri });
+    }
+  }
+  return out.slice(0, 12);
+}
+
+// --- Prompts ----------------------------------------------------------------
 
 function systemInstruction(): string {
   return [
@@ -116,33 +159,64 @@ function systemInstruction(): string {
     'level is critical|high|medium|low. change type is new|confirmed|weakened|discarded|escalated|degraded.',
     '',
     'Tone: direct, technical, dry. No newsletter style, no emotional language, no filler.',
-    'Do NOT invent real URLs, journalists, or quotes attributed to real outlets.',
     'Write all prose fields in Spanish.',
   ].join('\n');
 }
 
-function userPrompt(catalog: Cat[], nowIso: string): string {
+function researchPrompt(nowIso: string): string {
+  return [
+    `Hoy es ${nowIso}. Usa la búsqueda de Google para identificar los 4-7 desarrollos MÁS relevantes para decisiones,`,
+    'en IA y en geopolítica, en este momento.',
+    'Para cada uno indica: qué ha cambiado exactamente, por qué importa estratégicamente (incentivos, restricciones,',
+    'capacidades, costes, riesgos o probabilidades), y su grado de confirmación.',
+    'Prioriza lo verificable y actual sobre lo llamativo. Sé concreto y conciso. Cita las fuentes.',
+  ].join('\n');
+}
+
+function schemaBlock(catalog: Cat[]): string[] {
   const cat = catalog.map((c) => `- ${c.id} | ${c.name} | ${c.category}`).join('\n');
   return [
-    `Today is ${nowIso}. Produce the CURRENT briefing as a single JSON object.`,
-    '',
-    'Use ONLY these variable ids for signal.variableId, change.relatedVariableId and threshold.relatedVariableId:',
+    'Usa ÚNICAMENTE estos ids de variable para signal.variableId, change.relatedVariableId y threshold.relatedVariableId:',
     cat,
     '',
-    'Return JSON with EXACTLY these keys (no markdown, no commentary):',
+    'Devuelve JSON con EXACTAMENTE estas claves (sin markdown, sin comentarios):',
     '{',
     '  "executiveVerdict": { "whatChanged": str, "whatDidNotChange": str, "deservesAttentionToday": bool, "attentionRationale": str, "mainDistractionRisk": str, "watchTomorrow": str },',
     '  "signalLevels": { "ai": {"level":"high|medium|low","explanation":str}, "geopolitics": {"level":"high|medium|low","explanation":str}, "noise": {"level":"high|medium|low","explanation":str}, "changeSinceLastRun": {"level":"none|minor|material|structural","explanation":str} },',
-    '  "signals": [ { "id": "sig-...", "title": str, "category":"AI|Geopolitics", "variableId": one-of-catalog, "variableName": str, "impactScore":0-100, "confidenceScore":0-100, "noveltyScore":0-100, "actionabilityScore":0-100, "persistenceScore":0-100, "noiseRiskScore":0-100, "level":"critical|high|medium|low", "status":"confirmed|probable|rumor|inferred", "timeHorizon":"24h|72h|7d|30d|structural", "whyItMatters": str, "summary": str, "winners":[str], "pressuredActors":[str], "newIncentive": str, "firstOrderConsequence": str, "secondOrderConsequence": str, "invalidationCriteria":[str], "sources":[{"id":str,"label":"MOCK: ...","type":"mock"}] } ],',
+    '  "signals": [ { "id": "sig-...", "title": str, "category":"AI|Geopolitics", "variableId": one-of-catalog, "variableName": str, "impactScore":0-100, "confidenceScore":0-100, "noveltyScore":0-100, "actionabilityScore":0-100, "persistenceScore":0-100, "noiseRiskScore":0-100, "level":"critical|high|medium|low", "status":"confirmed|probable|rumor|inferred", "timeHorizon":"24h|72h|7d|30d|structural", "whyItMatters": str, "summary": str, "winners":[str], "pressuredActors":[str], "newIncentive": str, "firstOrderConsequence": str, "secondOrderConsequence": str, "invalidationCriteria":[str], "sources":[{"label": str, "sourceIndex": optional int}] } ],',
     '  "changesSinceLastRun": [ { "id":"ch-...", "type":"new|confirmed|weakened|discarded|escalated|degraded", "category":"AI|Geopolitics", "title": str, "previousState": str, "currentState": str, "explanation": str, "impact":"low|medium|high|critical", "relatedSignalId": optional sig-id, "relatedVariableId": optional catalog-id } ],',
     '  "discardedNoise": [ { "id":"disc-...", "title": str, "reason":"hype|rumor|repetition|emotional_not_actionable|no_hard_variable|not_verifiable", "noiseLevel":"low|medium|high", "discardRationale": str } ],',
     '  "thresholds": [ { "id":"th-...", "condition": str, "consequence": str, "inverseCondition": optional str, "inverseConsequence": optional str, "relatedVariableId": optional catalog-id, "relatedSignalId": optional sig-id } ]',
     '}',
     '',
-    'Rules: 4 to 7 signals, only the most decision-relevant current AI/geopolitics dynamics.',
-    'Each signal: 2-3 short sentences max per prose field, up to 3 winners, 3 pressuredActors, 3 invalidationCriteria, 1-2 sources.',
-    'Up to 6 changes, 6 discarded items, 6 thresholds.',
-    'Score signals so only genuine nervous-system items reach >=80; do not pad.',
+    'Reglas: 4 a 7 señales, solo lo más relevante para decisiones. No rellenes.',
+    'Puntúa de modo que solo lo que de verdad entra al sistema nervioso llegue a >=80.',
+    'Hasta 6 cambios, 6 descartes, 6 umbrales.',
+  ];
+}
+
+function structureWithResearch(catalog: Cat[], nowIso: string, research: string, sources: GroundSource[]): string {
+  const srcList = sources.map((s, i) => `[${i}] ${s.title}`).join('\n');
+  return [
+    `Hoy es ${nowIso}. A partir de esta investigación con fuentes reales, produce el briefing ACTUAL como un único objeto JSON.`,
+    '',
+    'INVESTIGACIÓN:',
+    research.slice(0, 6000),
+    '',
+    'FUENTES DISPONIBLES (en sources[].sourceIndex pon el número de la fuente que respalda esa señal):',
+    srcList || '(ninguna)',
+    '',
+    ...schemaBlock(catalog),
+    'En cada señal, adjunta 1-2 fuentes con su sourceIndex de la lista anterior. No inventes fuentes.',
+  ].join('\n');
+}
+
+function structureFromKnowledge(catalog: Cat[], nowIso: string): string {
+  return [
+    `Hoy es ${nowIso}. Produce el briefing ACTUAL como un único objeto JSON con tu mejor conocimiento.`,
+    '',
+    ...schemaBlock(catalog),
+    'No inventes URLs ni cites medios reales; en sources usa etiquetas genéricas y omite sourceIndex.',
   ].join('\n');
 }
 
@@ -196,7 +270,7 @@ const IMPACTS = ['low', 'medium', 'high', 'critical'] as const;
 const DISCARD_REASONS = ['hype', 'rumor', 'repetition', 'emotional_not_actionable', 'no_hard_variable', 'not_verifiable'] as const;
 const CATEGORIES = ['AI', 'Geopolitics'] as const;
 
-function coerceBriefing(raw: Record<string, unknown>, nowIso: string, catalog: Cat[]) {
+function coerceBriefing(raw: Record<string, unknown>, nowIso: string, catalog: Cat[], groundSources: GroundSource[]) {
   const byId = new Map(catalog.map((c) => [c.id, c]));
   const byName = new Map(catalog.map((c) => [c.name.toLowerCase(), c]));
   const resolveVar = (variableId: unknown, variableName: unknown, category: 'AI' | 'Geopolitics'): Cat => {
@@ -236,10 +310,7 @@ function coerceBriefing(raw: Record<string, unknown>, nowIso: string, catalog: C
         firstOrderConsequence: str(sig.firstOrderConsequence, ''),
         secondOrderConsequence: str(sig.secondOrderConsequence, ''),
         invalidationCriteria: strList(sig.invalidationCriteria),
-        sources: arr(sig.sources).map((src, j) => {
-          const o = (src ?? {}) as Record<string, unknown>;
-          return { id: str(o.id, `src-gen-${i + 1}-${j + 1}`), label: str(o.label, 'MOCK: Gemini synthesis'), type: 'mock' as const };
-        }),
+        sources: coerceSources(sig.sources, groundSources, i),
       };
     });
   if (signals.length === 0) throw new Error('gemini returned no signals');
@@ -325,6 +396,23 @@ function coerceBriefing(raw: Record<string, unknown>, nowIso: string, catalog: C
     actionMatrix: deriveMatrix(signals, discardedNoise),
     thresholds,
   };
+}
+
+// Map model-emitted sources to real grounded URLs via sourceIndex; never trust
+// a model-emitted URL (could be hallucinated) — only attach uris we searched.
+function coerceSources(raw: unknown, groundSources: GroundSource[], i: number) {
+  const list = arr(raw).map((src, j) => {
+    const o = (src ?? {}) as Record<string, unknown>;
+    const idx = Number(o.sourceIndex);
+    const g = Number.isInteger(idx) && idx >= 0 && idx < groundSources.length ? groundSources[idx] : null;
+    return {
+      id: `src-gen-${i + 1}-${j + 1}`,
+      label: g ? g.title : str(o.label, 'Gemini synthesis'),
+      type: 'mock' as const,
+      ...(g ? { url: g.uri } : {}),
+    };
+  });
+  return list.length ? list : [{ id: `src-gen-${i + 1}-1`, label: 'Gemini synthesis', type: 'mock' as const }];
 }
 
 type ScoredSignal = {

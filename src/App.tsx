@@ -12,6 +12,7 @@ import { Thresholds } from './components/Thresholds';
 import {
   getDataSourceId,
   getPayloadGeneratedAt,
+  getPayloadGrounded,
   getPayloadSource,
   loadBriefings,
   requestRegeneration,
@@ -22,6 +23,7 @@ import type { BriefingRun } from './types/briefing';
 export default function App() {
   const [data, setData] = useState<BriefingRun[] | null>(null);
   const [payloadSource, setPayloadSource] = useState<string>('');
+  const [grounded, setGrounded] = useState<boolean>(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [index, setIndex] = useState(0);
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -36,6 +38,7 @@ export default function App() {
         if (!active) return;
         setData(b);
         setPayloadSource(getPayloadSource());
+        setGrounded(getPayloadGrounded());
         setIndex(Math.max(0, b.length - 1)); // open on the most recent snapshot
       })
       .catch((e) => {
@@ -96,6 +99,7 @@ export default function App() {
         if (getPayloadSource().startsWith('gemini') && gen && gen !== before) {
           setData(fresh);
           setPayloadSource(getPayloadSource());
+          setGrounded(getPayloadGrounded());
           setIndex(Math.max(0, fresh.length - 1));
           landed = true;
           break;
@@ -110,6 +114,7 @@ export default function App() {
         const latest = await loadBriefings();
         setData(latest);
         setPayloadSource(getPayloadSource());
+        setGrounded(getPayloadGrounded());
       } catch {
         /* ignore */
       }
@@ -135,6 +140,7 @@ export default function App() {
         onRefresh={handleRefresh}
         dataSourceId={dataSourceId}
         payloadSource={payloadSource}
+        grounded={grounded}
       />
 
       <main className="flex-1 px-4 sm:px-6 lg:px-8 py-4 sm:py-6 max-w-[1440px] w-full mx-auto flex flex-col gap-4 sm:gap-5">
