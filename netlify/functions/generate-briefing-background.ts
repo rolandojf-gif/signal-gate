@@ -62,7 +62,7 @@ async function generateCurrentBriefing(key: string): Promise<{ current: ReturnTy
   let research = '';
   let sources: GroundSource[] = [];
   try {
-    const r = await callGemini(key, MODEL, { user: researchPrompt(nowIso), grounded: true, temperature: 0.4 });
+    const r = await callGemini(key, MODEL, { user: researchPrompt(catalog, nowIso), grounded: true, temperature: 0.4 });
     research = r.text;
     sources = r.sources;
   } catch {
@@ -146,50 +146,49 @@ function extractGroundingSources(candidate: Candidate | undefined): GroundSource
 function systemInstruction(): string {
   return [
     'You are the Signal Gate engine: a personal intelligence filter for AI and geopolitics.',
-    'You do not aggregate news; you decide what deserves attention. Filter noise aggressively.',
+    'You do not aggregate news; you decide what deserves attention. Cover the WHOLE AI + geopolitics',
+    'landscape across all the radar variables provided in the task — do not favor any pre-chosen topic.',
+    'You are not searching for specific named topics; the test below selects what matters.',
     '',
-    'A SIGNAL must meet at least 3 of 5 criteria: novelty, persistence, impact on a hard variable,',
-    'strategic consequence (changes incentives/constraints/capabilities/costs/risks/probabilities),',
-    'verifiability. Otherwise it is NOISE.',
+    'SIGNAL TEST — an item is a SIGNAL only if it meets AT LEAST 3 of these 5 criteria:',
+    '1) Novelty: genuinely new vs the ongoing background narrative, not a re-run of the same story.',
+    '2) Persistence: not an isolated short-cycle event; shows continuity, repetition or confirmation.',
+    '3) Hard-variable impact: it alters a concrete variable from the radar catalog given in the task.',
+    '4) Strategic consequence: it changes incentives, constraints, capabilities, costs, risks or probabilities.',
+    '5) Verifiability: at least one traceable source or indicator.',
+    'If it meets FEWER than 3, it is NOT a signal — put it in discardedNoise (with the matching reason) or omit it.',
+    'This applies to EVERY domain equally — regulation, frontier models, energy, conflicts, chips, elections, etc.',
+    'are signals ONLY when they pass (e.g. regulation counts only if it changes obligations, costs or market access;',
+    'a conflict counts only if it alters energy, routes or alliances).',
     '',
-    'Scores are 0-100. signalScore is derived as:',
-    '0.30*impact + 0.25*confidence + 0.20*novelty + 0.15*actionability + 0.10*persistence - 0.20*noiseRisk.',
-    'signalScore>=80 enters the nervous system; 60-79 monitor; <60 stays out.',
-    'timeHorizon is one of 24h|72h|7d|30d|structural. status is confirmed|probable|rumor|inferred.',
+    'DO NOT PAD. Return only the signals that genuinely pass — if there are only 2, return 2; if 1, return 1.',
+    'Never invent, stretch or generalize an item to fill the interface. Specificity over volume.',
+    '',
+    'Scores are 0-100. signalScore = 0.30*impact + 0.25*confidence + 0.20*novelty + 0.15*actionability',
+    '+ 0.10*persistence - 0.20*noiseRisk. >=80 nervous system; 60-79 monitor; <60 out.',
+    'timeHorizon is 24h|72h|7d|30d|structural. status is confirmed|probable|rumor|inferred.',
     'level is critical|high|medium|low. change type is new|confirmed|weakened|discarded|escalated|degraded.',
     '',
-    'TOPIC FOCUS — what actually matters here is the HARD AI + geopolitics stack:',
-    '- Compute & semiconductors: HBM/HBM3e supply & pricing, advanced packaging (CoWoS), foundry capacity,',
-    '  GPUs/accelerators, inference cost, datacenters & power.',
-    '- Frontier capability: real capability or cost step-changes in frontier models, open weights with',
-    '  competitive impact.',
-    '- Geopolitics that MOVE those variables: export controls (chips, lithography tools, materials),',
-    '  critical materials, China/Taiwan, sanctions, shipping routes, energy.',
-    'Treat as NOISE (send to discardedNoise, do NOT make it a signal): generic AI regulation / political',
-    'process with no changed obligation, cost or market access; op-eds and "AI bubble" takes; "agentic AI /',
-    'AI will transform everything" hype without measurable adoption; model rumors without an independent benchmark.',
-    'A signal must alter a HARD variable from the radar. Depth and specificity over mainstream headlines.',
-    '',
     'Tone: direct, technical, dry. No newsletter style, no emotional language, no filler.',
-    'Write all prose fields in Spanish.',
+    'Do NOT invent URLs or attribute quotes to real outlets. Write all prose fields in Spanish.',
   ].join('\n');
 }
 
-function researchPrompt(nowIso: string): string {
+function researchPrompt(catalog: Cat[], nowIso: string): string {
+  const vars = catalog.map((c) => `${c.name} (${c.category})`).join('; ');
   return [
-    `Hoy es ${nowIso}. Usa la búsqueda de Google para investigar los desarrollos MÁS relevantes para decisiones`,
-    'en la PILA DURA de IA y geopolítica tecnológica. Cubre específicamente y busca señales concretas en:',
-    '- HBM / HBM3e: asignación, escasez, precios, guidance de proveedores.',
-    '- Advanced packaging / CoWoS y capacidad de foundry (TSMC, etc.): lead times, ampliaciones, cuellos de botella.',
-    '- Aceleradores / GPUs y coste de inferencia: nuevos chips, recortes/subidas de precio, disponibilidad.',
-    '- Energía y datacenters para IA: restricciones de red, contratos de energía, capacidad.',
-    '- Export controls sobre chips, equipos de litografía y materiales críticos; listas de entidades; licencias.',
-    '- Materiales críticos (galio, germanio, tierras raras, substratos) y su control.',
-    '- China / Taiwán, sanciones y rutas marítimas que afecten al compute o la energía.',
-    '- Modelos frontier: saltos reales de capacidad o de coste, open weights con impacto competitivo.',
-    'Para cada hallazgo: qué cambió exactamente, qué variable dura altera, grado de confirmación, y la fuente.',
-    'IGNORA regulación/política genérica sin cambio operativo, op-eds, "burbuja IA" y hype de "IA agéntica".',
-    'Prioriza lo técnico, específico, verificable y actual sobre el titular mainstream. Cita las fuentes.',
+    `Hoy es ${nowIso}. Investiga con búsqueda qué ha cambiado REALMENTE en las últimas 24-72h en el panorama`,
+    'de IA y geopolítica. Evalúa, SIN favorecer ninguna, todas estas variables vivas del radar:',
+    vars,
+    '',
+    'Para cada posible desarrollo aplica el TEST DE SEÑAL (necesita >=3 de 5):',
+    '1) novedad real (no el mismo relato de siempre); 2) persistencia/confirmación (no evento aislado);',
+    '3) impacto concreto en una de las variables del radar; 4) consecuencia estratégica (cambia incentivos,',
+    'restricciones, capacidades, costes, riesgos o probabilidades); 5) verificabilidad con fuente.',
+    'Descarta lo que NO pase el test: titular mainstream sin cambio operativo, proceso regulatorio/político sin',
+    'nuevas obligaciones/costes/acceso, op-eds, "burbuja IA", hype sin adopción medible, rumores sin benchmark.',
+    'No fuerces ni inventes temas: si una variable no tiene nada real hoy, omítela. Es válido encontrar pocas',
+    'señales. Para cada hallazgo di qué cambió, qué variable altera y su confirmación. Cita las fuentes.',
   ].join('\n');
 }
 
@@ -209,12 +208,13 @@ function schemaBlock(catalog: Cat[]): string[] {
     '  "thresholds": [ { "id":"th-...", "condition": str, "consequence": str, "inverseCondition": optional str, "inverseConsequence": optional str, "relatedVariableId": optional catalog-id, "relatedSignalId": optional sig-id } ]',
     '}',
     '',
-    'Reglas: 4 a 7 señales, solo lo más relevante para decisiones en la pila dura (compute, semis, packaging,',
-    'export controls, materiales, energía, frontier, China/Taiwán). Cada señal DEBE alterar una variable dura.',
-    'Manda a discardedNoise la regulación/política genérica sin cambio de obligaciones/costes/acceso, los op-eds,',
-    'la "burbuja IA" y el hype de IA agéntica sin adopción medible. No rellenes.',
-    'Puntúa de modo que solo lo que de verdad entra al sistema nervioso llegue a >=80.',
-    'Hasta 6 cambios, 6 descartes, 6 umbrales.',
+    'TEST DE SEÑAL: en "signals" incluye SOLO los desarrollos que cumplen >=3 de los 5 criterios',
+    '(novedad, persistencia, impacto en una variable del catálogo, consecuencia estratégica, verificabilidad).',
+    'Todo lo que no pase va a "discardedNoise" con su motivo. Aplica esto a TODOS los dominios por igual',
+    '(regulación, frontier, energía, conflictos, chips, elecciones...): solo entran si pasan el test.',
+    'NO RELLENES por volumen: muestra solo las señales reales (máx. 7). Si solo hay 2, devuelve 2; si 1, 1.',
+    'No inventes ni estires señales. Puntúa de modo que solo lo que de verdad entra al sistema nervioso llegue a >=80.',
+    'Como máximo 6 cambios, 6 descartes, 6 umbrales — también solo los reales.',
   ];
 }
 
