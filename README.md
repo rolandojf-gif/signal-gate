@@ -43,15 +43,23 @@ The app only ever calls `loadBriefings()`. To move off mock data you don't touch
 code — you implement the matching loader in [`src/lib/briefingSource.ts`](src/lib/briefingSource.ts)
 and set `VITE_DATA_SOURCE`:
 
-| `VITE_DATA_SOURCE` | Loader to implement | Source |
-| ------------------ | ------------------- | ------ |
-| `mock` (default)   | ready               | `src/data/mockBriefings.ts` |
-| `netlify`          | `loadNetlify()`     | `/.netlify/functions/briefings` |
-| `supabase`         | `loadSupabase()`    | Supabase table |
+| `VITE_DATA_SOURCE` | Status | Source |
+| ------------------ | ------ | ------ |
+| `mock`             | ready  | `src/data/mockBriefings.ts` (bundled) |
+| `netlify`          | ready — **mock payload** | `/.netlify/functions/briefings` |
+| `supabase`         | `loadSupabase()` stub | Supabase table |
+
+The deployed site runs on `netlify` (set in `netlify.toml`): it fetches the JSON
+from the serverless function instead of bundling it. The payload is still mock —
+swapping in real data happens *inside* [`netlify/functions/briefings.ts`](netlify/functions/briefings.ts),
+the client contract is unchanged. Local `npm run dev` defaults to `mock`.
 
 Any backend only needs to return `BriefingRun[]`. `normalizeBriefings()` re-derives
 `signalScore` from its six component scores, so backends never compute the headline
 number themselves and it can't drift from the formula the UI shows.
+
+To exercise the function locally, run `npx netlify-cli dev` (proxies the app and the
+function) instead of `npm run dev`.
 
 ### Coherence validator
 

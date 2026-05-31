@@ -31,11 +31,13 @@ async function loadMock(): Promise<BriefingRun[]> {
 }
 
 async function loadNetlify(): Promise<BriefingRun[]> {
-  // Phase 2 seam — implement and flip VITE_DATA_SOURCE=netlify:
-  //   const res = await fetch('/.netlify/functions/briefings');
-  //   if (!res.ok) throw new Error(`briefings function ${res.status}`);
-  //   return (await res.json()) as BriefingRun[];
-  throw new Error('Netlify Functions source not wired yet. Set VITE_DATA_SOURCE=mock.');
+  const res = await fetch('/.netlify/functions/briefings', {
+    headers: { accept: 'application/json' },
+  });
+  if (!res.ok) {
+    throw new Error(`Netlify briefings function returned ${res.status} ${res.statusText}`);
+  }
+  return (await res.json()) as BriefingRun[];
 }
 
 async function loadSupabase(): Promise<BriefingRun[]> {

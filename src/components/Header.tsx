@@ -10,13 +10,16 @@ type Props = {
 };
 
 const dataSourceLabel: Record<DataSourceId, string> = {
-  mock: 'Mock mode — API not connected yet',
-  netlify: 'Live · Netlify Functions',
-  supabase: 'Live · Supabase',
+  mock: 'Mock mode — bundled data',
+  netlify: 'Netlify Function · mock payload',
+  supabase: 'Supabase · live data',
 };
 
 export function Header({ timestamp, isRefreshing, justRefreshed, onRefresh, dataSourceId }: Props) {
-  const isMock = dataSourceId === 'mock';
+  // mute = bundled mock; info = wired through a function but payload is still
+  // mock; ok = genuinely live data.
+  const dotCls =
+    dataSourceId === 'mock' ? 'bg-signal-mute' : dataSourceId === 'netlify' ? 'bg-signal-info' : 'bg-signal-ok';
   return (
     <header className="hairline px-4 sm:px-6 lg:px-8 py-4 flex flex-col sm:flex-row sm:items-end sm:justify-between gap-4">
       <div className="flex flex-col gap-1">
@@ -29,7 +32,7 @@ export function Header({ timestamp, isRefreshing, justRefreshed, onRefresh, data
         <div className="flex items-center gap-3 text-[11px] text-ink-muted">
           <span className="font-mono">last query — {formatTimestamp(timestamp)}</span>
           <span className="inline-flex items-center gap-1.5">
-            <span className={`dot ${isMock ? 'bg-signal-mute' : 'bg-signal-ok'}`} />
+            <span className={`dot ${dotCls}`} />
             {dataSourceLabel[dataSourceId]}
           </span>
         </div>

@@ -2,6 +2,17 @@
   command = "npm run build"
   publish = "dist"
 
+# Phase 2: the deployed app reads its data from the serverless function rather
+# than the bundled mock. Local `npm run dev` still defaults to mock.
+[build.environment]
+  VITE_DATA_SOURCE = "netlify"
+
+[functions]
+  directory = "netlify/functions"
+  node_bundler = "esbuild"
+
+# SPA fallback. Netlify serves /.netlify/functions/* before this catch-all, so
+# the API route is unaffected.
 [[redirects]]
   from = "/*"
   to = "/index.html"

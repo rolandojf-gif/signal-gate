@@ -128,7 +128,7 @@ export default function App() {
         </div>
 
         <footer className="text-[11px] text-ink-muted py-4 text-center">
-          Signal Gate · {dataSourceId} snapshot · {dataSourceId === 'mock' ? 'no live sources connected' : 'live'}
+          Signal Gate · source: {dataSourceId} · mock payload
         </footer>
       </main>
     </div>
