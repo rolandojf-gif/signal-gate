@@ -158,6 +158,18 @@ function systemInstruction(): string {
     'timeHorizon is one of 24h|72h|7d|30d|structural. status is confirmed|probable|rumor|inferred.',
     'level is critical|high|medium|low. change type is new|confirmed|weakened|discarded|escalated|degraded.',
     '',
+    'TOPIC FOCUS — what actually matters here is the HARD AI + geopolitics stack:',
+    '- Compute & semiconductors: HBM/HBM3e supply & pricing, advanced packaging (CoWoS), foundry capacity,',
+    '  GPUs/accelerators, inference cost, datacenters & power.',
+    '- Frontier capability: real capability or cost step-changes in frontier models, open weights with',
+    '  competitive impact.',
+    '- Geopolitics that MOVE those variables: export controls (chips, lithography tools, materials),',
+    '  critical materials, China/Taiwan, sanctions, shipping routes, energy.',
+    'Treat as NOISE (send to discardedNoise, do NOT make it a signal): generic AI regulation / political',
+    'process with no changed obligation, cost or market access; op-eds and "AI bubble" takes; "agentic AI /',
+    'AI will transform everything" hype without measurable adoption; model rumors without an independent benchmark.',
+    'A signal must alter a HARD variable from the radar. Depth and specificity over mainstream headlines.',
+    '',
     'Tone: direct, technical, dry. No newsletter style, no emotional language, no filler.',
     'Write all prose fields in Spanish.',
   ].join('\n');
@@ -165,11 +177,19 @@ function systemInstruction(): string {
 
 function researchPrompt(nowIso: string): string {
   return [
-    `Hoy es ${nowIso}. Usa la búsqueda de Google para identificar los 4-7 desarrollos MÁS relevantes para decisiones,`,
-    'en IA y en geopolítica, en este momento.',
-    'Para cada uno indica: qué ha cambiado exactamente, por qué importa estratégicamente (incentivos, restricciones,',
-    'capacidades, costes, riesgos o probabilidades), y su grado de confirmación.',
-    'Prioriza lo verificable y actual sobre lo llamativo. Sé concreto y conciso. Cita las fuentes.',
+    `Hoy es ${nowIso}. Usa la búsqueda de Google para investigar los desarrollos MÁS relevantes para decisiones`,
+    'en la PILA DURA de IA y geopolítica tecnológica. Cubre específicamente y busca señales concretas en:',
+    '- HBM / HBM3e: asignación, escasez, precios, guidance de proveedores.',
+    '- Advanced packaging / CoWoS y capacidad de foundry (TSMC, etc.): lead times, ampliaciones, cuellos de botella.',
+    '- Aceleradores / GPUs y coste de inferencia: nuevos chips, recortes/subidas de precio, disponibilidad.',
+    '- Energía y datacenters para IA: restricciones de red, contratos de energía, capacidad.',
+    '- Export controls sobre chips, equipos de litografía y materiales críticos; listas de entidades; licencias.',
+    '- Materiales críticos (galio, germanio, tierras raras, substratos) y su control.',
+    '- China / Taiwán, sanciones y rutas marítimas que afecten al compute o la energía.',
+    '- Modelos frontier: saltos reales de capacidad o de coste, open weights con impacto competitivo.',
+    'Para cada hallazgo: qué cambió exactamente, qué variable dura altera, grado de confirmación, y la fuente.',
+    'IGNORA regulación/política genérica sin cambio operativo, op-eds, "burbuja IA" y hype de "IA agéntica".',
+    'Prioriza lo técnico, específico, verificable y actual sobre el titular mainstream. Cita las fuentes.',
   ].join('\n');
 }
 
@@ -189,7 +209,10 @@ function schemaBlock(catalog: Cat[]): string[] {
     '  "thresholds": [ { "id":"th-...", "condition": str, "consequence": str, "inverseCondition": optional str, "inverseConsequence": optional str, "relatedVariableId": optional catalog-id, "relatedSignalId": optional sig-id } ]',
     '}',
     '',
-    'Reglas: 4 a 7 señales, solo lo más relevante para decisiones. No rellenes.',
+    'Reglas: 4 a 7 señales, solo lo más relevante para decisiones en la pila dura (compute, semis, packaging,',
+    'export controls, materiales, energía, frontier, China/Taiwán). Cada señal DEBE alterar una variable dura.',
+    'Manda a discardedNoise la regulación/política genérica sin cambio de obligaciones/costes/acceso, los op-eds,',
+    'la "burbuja IA" y el hype de IA agéntica sin adopción medible. No rellenes.',
     'Puntúa de modo que solo lo que de verdad entra al sistema nervioso llegue a >=80.',
     'Hasta 6 cambios, 6 descartes, 6 umbrales.',
   ];
